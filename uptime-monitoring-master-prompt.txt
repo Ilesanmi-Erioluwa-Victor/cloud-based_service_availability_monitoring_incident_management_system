@@ -1,0 +1,636 @@
+========================================================================
+CLOUD-BASED SERVICE AVAILABILITY MONITORING AND INCIDENT MANAGEMENT
+SYSTEM
+MASTER CODEX / OPENCODE IMPLEMENTATION PROMPT (Node.js + MongoDB +
+React)
+========================================================================
+
+HOW TO USE THIS FILE
+---------------------
+Paste the "MASTER PROMPT" section into Codex/OpenCode (or Claude Code)
+as your first instruction, then build in the phases under "BUILD
+ORDER" — one phase at a time, testing before moving on. Get the check
+engine (the part that actually pings a real URL and records the
+result) working standalone BEFORE building incidents/alerting/
+dashboard on top of it — everything else depends on it producing
+trustworthy data.
+
+A COST NOTE UP FRONT — READ THIS FIRST
+--------------------------------------------
+Your abstract mentions alerting "such as email or SMS." Email via
+Brevo is genuinely free at this project's scale (as in your other
+projects). SMS is NOT free the way email is — SMS APIs (Termii,
+Twilio, etc.) charge per message, even on their "free trial" tiers
+which usually just give you a small number of free trial credits, not
+ongoing free sending. Recommended design: email is the ALWAYS-ON, free
+default channel for every alert; SMS is an OPTIONAL channel, only
+triggered for the highest severity level (e.g. "critical"), so you
+don't burn through paid credits during routine testing/demoing. State
+this cost-consciousness explicitly in your report — it's a sensible,
+real-world engineering decision, not a limitation to hide.
+
+========================================================================
+MASTER PROMPT (paste this in)
+========================================================================
+
+You are building "UptimeGuard" — a cloud-based service availability
+monitoring and incident management system for a Nigerian polytechnic
+HND final year project, using Node.js, MongoDB, and React throughout.
+The system continuously monitors registered services/applications for
+uptime and performance using HTTP/HTTPS status checks, ping/TCP checks,
+and API health checks, automatically detects outages and degraded
+performance, opens and manages incidents through their full lifecycle,
+notifies administrators via email (and optionally SMS for critical
+incidents), and presents everything on a centralized, real-time
+incident management dashboard. Follow this spec exactly. Build
+incrementally: the check engine first (proven against real URLs),
+then incident detection/lifecycle, then alerting, then the dashboard.
+Confirm each phase works before moving to the next.
+
+PROJECT GOAL
+-------------
+Replace manual/fragmented service monitoring (which fails to detect
+outages promptly or coordinate an effective response) with continuous
+automated monitoring that detects service degradation or downtime,
+automatically opens a structured incident record, alerts the right
+people, and tracks the incident through to resolution — giving
+organizations real visibility into uptime, downtime cost, and SLA
+compliance.
+
+TECH STACK (use exactly this)
+-------------------------------
+Backend:
+  - Node.js + Express
+  - MongoDB Atlas (via the official `mongodb` Node driver or
+    Mongoose)
+  - `axios` for HTTP/HTTPS status checks and API health checks
+  - `node:net` (TCP connect check) as the PRIMARY "reachability" check
+    instead of raw ICMP ping — see PING/ICMP CAVEAT below for why
+  - `node-cron` (or a more robust per-service scheduling approach — see
+    SCHEDULING DESIGN below) for running checks on each service's
+    configured interval
+  - `socket.io` for real-time push of check results/incident updates
+    to the dashboard
+  - `jsonwebtoken` + `bcrypt` for auth
+  - `express-rate-limit`
+  - Brevo transactional HTTP API (via axios POST, using
+    `BREVO_API_KEY`) for email alerts — NOT SMTP
+  - An SMS API (Termii is a common, Nigeria-friendly choice; Twilio is
+    a global alternative) — OPTIONAL channel, critical-severity only,
+    per the COST NOTE above
+  - Node's built-in `crypto` module for encrypting any per-service
+    auth credentials (e.g. an API key header a health-check endpoint
+    requires) at rest
+
+Frontend:
+  - React (Vite) + Tailwind CSS
+  - `socket.io-client` for real-time dashboard updates
+  - `recharts` for uptime/response-time historical charts
+
+Deployment:
+  - Backend: Render
+  - Frontend: Vercel
+  - Database: MongoDB Atlas
+
+PING/ICMP CAVEAT — READ THIS FIRST
+----------------------------------------
+True ICMP ping typically requires raw sockets and elevated OS
+permissions, which are often unavailable or blocked inside a
+containerized hosting environment like Render. Rather than fighting
+this, use a TCP CONNECT CHECK (attempt to open a TCP connection to the
+target host/port using Node's built-in `net` module, measure whether
+it succeeds and how long it took) as your "ping test" — this is a
+legitimate, widely-used substitute for basic reachability testing in
+real monitoring tools when ICMP isn't available, and it's honest to
+call it exactly that in your report: "a TCP connect check used in
+place of raw ICMP ping, since ICMP requires elevated privileges not
+available in typical cloud hosting environments." Don't claim it's
+literal ICMP ping if it isn't.
+
+SCHEDULING DESIGN — WHY NOT JUST ONE GLOBAL node-cron JOB
+----------------------------------------------------------------
+Different services will have different check intervals (e.g. a
+critical payment API checked every 30 seconds, a low-priority internal
+tool checked every 5 minutes). Rather than one crude fixed-interval
+cron job scanning everything every time, implement a lightweight
+in-process scheduler:
+  - On startup (and whenever a service is created/updated), (re)schedule
+    that service's own check loop using `setInterval` (cleared and
+    recreated if the service's interval changes), OR use `node-cron`
+    with a single "tick every N seconds" job that checks which
+    services are due for a check based on their `lastCheckedAt` +
+    `checkIntervalSeconds`
+  - Either approach is fine — document which you chose and why in
+    Chapter 3. The per-service `setInterval` approach is simpler to
+    reason about for a final year project scope; a job-queue-based
+    approach (e.g. BullMQ + Redis) is more production-grade but adds
+    real infrastructure complexity you likely don't need here
+
+FOLDER STRUCTURE
+------------------
+uptimeguard/
+  backend/
+    src/
+      config/            (db.js, env.js)
+      models/             (User.js, Service.js, CheckResult.js,
+                             Incident.js, MaintenanceWindow.js,
+                             NotificationLog.js)
+      controllers/
+      routes/
+      services/
+        checkEngine/
+          httpCheck.js         (HTTP/HTTPS status + response time)
+          tcpCheck.js            (TCP connect "ping" check — see
+                                    caveat above)
+          apiHealthCheck.js        (hits a health endpoint, validates
+                                    response body/schema, supports an
+                                    optional auth header)
+          sslCheck.js               (checks HTTPS certificate expiry
+                                    for a target — see SSL MONITORING
+                                    below)
+        schedulerService.js         (manages per-service check timers)
+        incidentService.js           (open/update/resolve incident
+                                       lifecycle logic, consecutive-
+                                       failure/success thresholds,
+                                       flapping detection)
+        alertService.js                (email always, SMS for
+                                       critical-only, escalation logic)
+        slaService.js                    (uptime % calculation per
+                                       service per period, SLA breach
+                                       detection)
+        auditService.js
+        encryptionService.js              (Node crypto — encrypts
+                                       per-service check credentials)
+      sockets/            (socketHandlers.js)
+      middleware/         (auth.js, rbac.js, rateLimit.js)
+      server.js
+    package.json
+    .env.example
+  frontend/
+    src/
+      components/
+      pages/
+      hooks/             (useSocket.js, useServices.js, useIncidents.js)
+      services/api.js
+      utils/
+    package.json
+  README.md
+
+DATABASE COLLECTIONS (MongoDB)
+------------------------------------
+users
+  _id, name, email (unique), passwordHash,
+  role: "admin"|"manager"|"responder",
+  notificationPreferences: { emailEnabled: bool, smsEnabled: bool,
+  phoneNumber (nullable), smsMinSeverity: "critical"|"major"|"minor" },
+  createdAt, updatedAt
+
+services      (the monitored targets)
+  _id, name, ownerTeam, checkType: "http"|"https"|"tcp"|
+  "api_health", targetUrlOrHost, targetPort (for tcp checks),
+  expectedStatusCodes: [number] (e.g. [200, 201]),
+  healthCheckAuthHeaderEncrypted (nullable, for api_health checks
+  requiring an API key/token), checkIntervalSeconds (e.g. 30, 60,
+  300), timeoutMs, responseTimeThresholdMs (above this = "degraded"
+  even if it responds successfully), consecutiveFailuresForIncident
+  (e.g. 3 — avoid opening an incident on one transient blip),
+  consecutiveSuccessesForResolve (e.g. 2), sslCheckEnabled: bool,
+  sslExpiryWarningDays (e.g. 14), severityLevel: "critical"|"major"|
+  "minor" (assigned per service, used to decide alert channels/
+  escalation), isActive: bool, lastCheckedAt, currentStatus: "up"|
+  "degraded"|"down"|"flapping"|"maintenance"|"unknown",
+  consecutiveFailureCount, consecutiveSuccessCount, createdAt,
+  updatedAt
+
+checkResults
+  _id, serviceId (ref: services), checkedAt, success: bool,
+  statusCode (nullable), responseTimeMs, errorType: "timeout"|
+  "connection_refused"|"wrong_status_code"|"invalid_response_body"|
+  "ssl_error"|null, errorMessage (nullable)
+
+incidents
+  _id, serviceId (ref: services), status: "open"|"acknowledged"|
+  "resolved", severity: "critical"|"major"|"minor" (copied from the
+  service's configured level at the time of opening — see EDGE CASES
+  for why this is snapshotted), detectedAt, acknowledgedAt (nullable),
+  acknowledgedByUserId (ref: users, nullable), resolvedAt (nullable),
+  downtimeDurationSeconds (computed on resolution),
+  timeline: [ { timestamp, event: "opened"|"acknowledged"|
+  "escalated"|"status_note"|"resolved", note, byUserId } ]
+  // embedded timeline array — natural fit for MongoDB, avoids a
+  // separate join collection for what's fundamentally a log of this
+  // one incident
+  rootCauseNote (nullable, filled in by an admin after resolution —
+  optional postmortem field)
+
+maintenanceWindows
+  _id, serviceId (ref: services), startAt, endAt, reason,
+  createdByUserId (ref: users), createdAt
+  // while a service has an active maintenance window, check failures
+  // during that window are recorded but do NOT open an incident — see
+  // EDGE CASES
+
+notificationLogs
+  _id, incidentId (ref: incidents), channel: "email"|"sms",
+  recipientUserId (ref: users), sentAt, status: "sent"|"failed",
+  errorMessage (nullable)
+  // separate from auditLogs-style logs elsewhere in your other
+  // projects — this one specifically tracks whether an alert
+  // actually went out, for troubleshooting "why didn't I get
+  // notified"
+
+Indexes to create in MongoDB Atlas:
+  - users.email (unique)
+  - services: index on (isActive, lastCheckedAt) for the scheduler's
+    "who's due for a check" queries if you go the tick-based route
+  - checkResults: compound index on (serviceId, checkedAt) for fast
+    per-service history/chart queries
+  - checkResults: TTL index on `checkedAt` OR a scheduled aggregation/
+    rollup job — see DATA RETENTION below, same concern as any
+    high-frequency time-series collection
+  - incidents: compound index on (serviceId, status) for fast "is
+    there already an open incident for this service" checks
+  - maintenanceWindows: compound index on (serviceId, startAt, endAt)
+
+CORE FEATURES — COVER EVERY SCENARIO BELOW
+----------------------------------------------
+
+1. SERVICE REGISTRATION & CONFIGURATION
+   - Admin/manager registers a service to monitor: name, check type,
+     target URL/host/port, expected status codes, interval, timeout,
+     degraded-response-time threshold, failure/success thresholds,
+     severity level, optional API-health auth header (encrypted at
+     rest), optional SSL expiry monitoring
+   - Editing a service's `checkIntervalSeconds` must actually
+     reschedule its running check timer, not just update the DB field
+     and leave the old interval running until a server restart
+   - Deactivating a service pauses checks without deleting historical
+     data
+
+2. THE CHECK ENGINE (get this working standalone first)
+   - `httpCheck.js`: makes an HTTP/HTTPS request to the target,
+     records status code, response time, and whether the status code
+     matches `expectedStatusCodes`
+   - `tcpCheck.js`: attempts a TCP connection to host:port within the
+     configured timeout, records success/failure and connect time —
+     your "ping" substitute, per the caveat above
+   - `apiHealthCheck.js`: hits a specific health endpoint, optionally
+     attaching a decrypted auth header, and validates the response
+     body against an expected shape (e.g. `{ status: "ok" }`) — a
+     200 status code alone isn't enough if the body itself indicates
+     an unhealthy state
+   - `sslCheck.js`: for HTTPS targets with `sslCheckEnabled`, inspects
+     the certificate's expiry date (Node's `tls` module can retrieve
+     peer certificate details) and flags it if within
+     `sslExpiryWarningDays` of expiring, or if the certificate is
+     already invalid/expired — a genuinely useful, easy-to-demo extra
+     feature for a "cloud service monitoring" project
+   - Every check attempt (success or failure) is recorded as a
+     `checkResults` document, regardless of whether it triggers an
+     incident
+   - On a failing check, retry once or twice with a short delay before
+     counting it as a definitive failure — reduces false alarms from
+     genuinely transient network blips, distinct from the
+     consecutive-FAILED-CHECKS threshold used for incident creation
+
+3. INCIDENT DETECTION & LIFECYCLE (incidentService.js)
+   - A service's `consecutiveFailureCount` increments on each failed
+     check (after the retry logic above has run) and resets to 0 on
+     any successful check
+   - When `consecutiveFailureCount` reaches the service's configured
+     `consecutiveFailuresForIncident` threshold AND no incident is
+     currently open for that service, open a new incident (status
+     "open", severity copied from the service's current
+     `severityLevel`, `detectedAt` = now, first timeline entry
+     "opened")
+   - While an incident is open, continued failing checks do NOT open
+     duplicate incidents — check the "is there already an open
+     incident for this service" condition (via the compound index)
+     before creating a new one
+   - When `consecutiveSuccessCount` reaches
+     `consecutiveSuccessesForResolve` while an incident is open,
+     auto-resolve it: status "resolved", `resolvedAt` = now,
+     `downtimeDurationSeconds` computed from `detectedAt` to
+     `resolvedAt`, timeline entry "resolved"
+   - An admin/manager/responder can manually "acknowledge" an open
+     incident (records who and when) — acknowledgment doesn't resolve
+     it, just signals "someone is on it," which matters for escalation
+     logic below
+   - FLAPPING DETECTION: if a service opens and auto-resolves several
+     incidents within a short rolling window (e.g. 3+ incidents in 15
+     minutes), mark the service's `currentStatus` as "flapping" and
+     open a SINGLE incident describing the flapping pattern rather
+     than a rapid-fire sequence of separate open/resolve incidents —
+     this avoids an alert storm and is a realistic, examinable design
+     choice worth explaining
+
+4. ALERTING (alertService.js)
+   - On incident OPEN: email every user whose `notificationPreferences`
+     opt them in, via Brevo; additionally send SMS to users with
+     `smsEnabled: true` AND whose `smsMinSeverity` threshold is met by
+     this incident's severity (i.e. SMS only for the incidents that
+     matter enough to justify the per-message cost, per the COST NOTE)
+   - ESCALATION: if an open incident hasn't been acknowledged within a
+     configurable window (e.g. 10 minutes), send a follow-up
+     escalation alert (email, and SMS if the severity qualifies) to a
+     broader distribution list or a designated secondary contact —
+     implement this as a check within the scheduler tick or a
+     dedicated `node-cron` job scanning for unacknowledged incidents
+     past their escalation window
+   - Every alert attempt (successful or failed) recorded in
+     `notificationLogs` — this collection exists specifically so you
+     can answer "why didn't I get notified" during testing/demo, which
+     WILL come up
+   - Alert sending failures (Brevo/SMS API errors) must not crash the
+     incident-detection flow — log the failure, keep the incident
+     record correct regardless of whether the notification succeeded
+
+5. MAINTENANCE WINDOWS
+   - Admin can schedule a maintenance window for a service (start/end
+     time, reason)
+   - While a service's active maintenance window is in effect, failed
+     checks during that period are still RECORDED (for completeness)
+     but do NOT increment `consecutiveFailureCount` toward opening an
+     incident, and the service's `currentStatus` shows "maintenance"
+     rather than "down" — this is a standard, expected feature of any
+     real monitoring tool and prevents false alarms during planned
+     downtime
+
+6. SLA / UPTIME REPORTING (slaService.js)
+   - Compute uptime percentage per service over selectable periods
+     (24h/7d/30d/custom range) from `checkResults` (successful checks
+     / total checks in the period) AND from incident downtime
+     duration (two related but distinct calculations — document which
+     one you present as the headline "uptime %" and why)
+   - Compare against a configurable SLA target (e.g. 99.9%) per
+     service and flag periods where it was breached
+   - Historical response-time trend chart per service (recharts)
+
+7. DASHBOARD (real-time via Socket.io)
+   - Service overview grid: every monitored service, current status
+     (color-coded: up/degraded/down/flapping/maintenance), last
+     checked time, updated live as new check results arrive
+   - Incident list: active incidents prominently surfaced, filterable
+     history of resolved incidents, each showing its full timeline
+   - Service detail view: response-time and uptime charts, recent
+     check history, SSL expiry status if enabled
+   - SLA/uptime report view: per-service uptime % over selectable
+     periods, SLA breach flags
+   - Admin: manage services, maintenance windows, users/notification
+     preferences
+
+8. OPTIONAL — PUBLIC STATUS PAGE
+   - A simple, unauthenticated public page showing current status of
+     selected services (admin chooses which services are
+     "public-facing") and a recent incident history — a genuinely
+     standard feature of real status-monitoring products (Statuspage,
+     UptimeRobot, etc.) and an easy, impressive extra for your defense
+     if you have time for it
+
+EDGE CASES TO EXPLICITLY HANDLE
+------------------------------------
+  - A service's `severityLevel` is changed by an admin WHILE an
+    incident for that service is already open -> the OPEN incident
+    keeps its originally-snapshotted severity (don't retroactively
+    change an in-progress incident's severity just because the
+    service's default changed later) — this is why severity is copied
+    onto the incident document at creation time, not looked up live
+    from the service every time it's displayed
+  - Two checks for the same service overlap (a slow check hasn't
+    returned before the next scheduled check fires) -> guard against
+    concurrent overlapping checks for the same service (e.g. a simple
+    "is a check currently in flight for this service" flag) so you
+    don't get duplicate/racing check results
+  - A service is deleted while it has open incidents or historical
+    check data -> block deletion (or require resolving open incidents
+    first / soft-delete/archive) rather than silently orphaning
+    incident records
+  - Maintenance window ends WHILE the service is still actually down
+    for a real reason (maintenance ran long, or a real problem
+    emerged independently) -> once the window ends, resume normal
+    incident-detection logic immediately; don't require manual
+    re-activation
+  - SSL certificate check itself fails (can't connect to check the
+    cert at all) -> distinguish this from "certificate is expired" as
+    a different error type/incident, since one means "server
+    unreachable" and the other means "server reachable but cert is a
+    problem" — different remediation paths
+  - Flapping detection window itself needs a cooldown — once flagged
+    "flapping," don't immediately re-flag it again on the very next
+    check cycle; require the service to stabilize (a sustained period
+    of consistent status) before flapping status clears
+  - A user's `notificationPreferences.smsEnabled` is true but no valid
+    `phoneNumber` is set -> skip SMS for that user with a logged
+    reason in `notificationLogs`, don't let a missing phone number
+    silently swallow the alert attempt without a trace
+  - Brevo or the SMS provider is down/rate-limited during an incident
+    storm -> alert sending failures must be logged and retried
+    (or at minimum clearly reported), never allowed to crash the
+    check/incident pipeline itself
+  - Very high-frequency checks (e.g. a 10-second interval on many
+    services) generating a large `checkResults` volume -> see DATA
+    RETENTION below
+
+DATA RETENTION
+-------------------
+Raw check results at even a modest interval (e.g. every 60 seconds
+across a dozen services) accumulate quickly. Either:
+  a. Set a MongoDB TTL index on `checkResults.checkedAt` to
+     auto-expire raw results after a defined window (e.g. 30-60 days),
+     OR
+  b. Run a scheduled aggregation job that rolls up older raw results
+     into hourly/daily summary documents (uptime %, avg response time)
+     in a separate collection, then prunes the raw detail
+Pick one, implement it, and document the tradeoff explicitly in
+Chapter 3 — the same scalability-awareness talking point as any
+high-frequency time-series monitoring system.
+
+API/ROUTES (high level)
+--------------------------
+POST   /api/auth/login
+GET    /api/users/me
+PATCH  /api/users/me/notification-preferences
+GET    /api/services
+POST   /api/services
+PATCH  /api/services/:id                    (also reschedules its
+                                              check timer if the
+                                              interval changed)
+DELETE /api/services/:id
+GET    /api/services/:id/checks               (query: range)
+GET    /api/services/:id/sla                    (query: range)
+POST   /api/services/:id/maintenance-windows
+GET    /api/incidents                              (filterable:
+                                                     open/resolved,
+                                                     by service)
+PATCH  /api/incidents/:id/acknowledge
+PATCH  /api/incidents/:id/resolve                    (manual override,
+                                                       in addition to
+                                                       auto-resolve)
+PATCH  /api/incidents/:id/root-cause
+GET    /api/dashboard/summary
+GET    /api/public/status                              (optional
+                                                          public status
+                                                          page data,
+                                                          unauthenticated)
+
+Socket.io events (server -> client):
+  - `check:result` (serviceId, result)
+  - `service:status-changed` (serviceId, newStatus)
+  - `incident:opened` (incident)
+  - `incident:acknowledged` (incident)
+  - `incident:resolved` (incident)
+
+ENVIRONMENT VARIABLES (.env.example)
+-----------------------------------------
+MONGODB_URI=
+JWT_SECRET=
+BREVO_API_KEY=
+SMS_API_KEY=                     (Termii/Twilio — optional, only
+                                   needed if SMS alerting is enabled)
+FIELD_ENCRYPTION_KEY=              (for encrypting per-service health-
+                                    check auth headers)
+PORT=
+CORS_ALLOWED_ORIGIN=
+
+BUILD ORDER (build in this exact order, one phase at a time)
+------------------------------------------------------------------
+Phase 1: Express scaffold + MongoDB connection + Service model +
+         httpCheck.js and tcpCheck.js, run manually (not yet
+         scheduled) against a few REAL public URLs to confirm they
+         produce accurate results before anything else is built
+Phase 2: apiHealthCheck.js + sslCheck.js, same standalone verification
+         against real targets
+Phase 3: schedulerService.js — per-service timers running checks on
+         their configured interval, writing to checkResults
+Phase 4: incidentService.js — consecutive-failure/success thresholds,
+         incident open/auto-resolve logic, duplicate-open prevention
+Phase 5: Maintenance windows — pause incident creation during an
+         active window, resume normal logic when it ends
+Phase 6: Flapping detection
+Phase 7: alertService.js — email via Brevo on incident open, SMS for
+         critical-severity-only, escalation job for unacknowledged
+         incidents, notificationLogs wiring
+Phase 8: slaService.js — uptime % calculation, SLA breach flagging
+Phase 9: Socket.io wiring + React frontend (service grid, incident
+         list, service detail with charts, SLA view)
+Phase 10: Admin UI (service/maintenance-window/user management),
+          optional public status page, data retention implementation,
+          full edge-case hardening, deployment to Render + Vercel +
+          MongoDB Atlas
+
+Do not move to the next phase until the current one is fully working
+and testable end-to-end — Phases 1-2 especially must be verified
+against REAL target URLs (not just localhost) before the scheduler and
+incident logic are built on top of them.
+
+========================================================================
+STEP-BY-STEP EXECUTION GUIDE (for you, the developer)
+========================================================================
+
+1. SET UP ACCOUNTS/SERVICES FIRST
+   - MongoDB Atlas cluster (free tier)
+   - Brevo account + API key
+   - (Optional) Termii or Twilio account for SMS — only if you want to
+     demonstrate the SMS channel; budget for the fact that this isn't
+     free per the COST NOTE at the top of this file
+   - Render account (backend) + Vercel account (frontend)
+
+2. INITIALIZE THE PROJECT
+   - `npm init -y` in backend, `npm install express mongodb axios
+     socket.io node-cron jsonwebtoken bcrypt express-rate-limit
+     dotenv cors`
+   - `npm create vite@latest frontend -- --template react`, then
+     install Tailwind + socket.io-client + recharts + axios
+
+3. FEED PHASE 1 OF THE MASTER PROMPT TO CODEX/OPENCODE
+   Test httpCheck.js and tcpCheck.js manually against a handful of
+   real public URLs (including at least one you deliberately point at
+   a non-existent host, to confirm failure detection works) before
+   moving on.
+
+4. WORK THROUGH PHASES 2–10 SEQUENTIALLY
+   Register a handful of REAL services to monitor throughout
+   development (your own deployed projects from other final year
+   work are perfect test subjects) — testing against genuinely live
+   endpoints, including deliberately taking one down temporarily to
+   watch an incident open and resolve, is what makes this project's
+   core claim demonstrable in your defense.
+
+5. WRITE YOUR FIVE CHAPTERS ALONGSIDE THE BUILD
+   - Chapter 1: Introduction — the cost of unplanned downtime/
+     delayed incident detection to business continuity and SLA
+     compliance, limitations of manual/fragmented monitoring,
+     objectives, scope
+   - Chapter 2: Literature Review — service monitoring approaches
+     (synthetic monitoring/health checks vs real-user monitoring),
+     incident management frameworks (detection -> triage -> escalation
+     -> resolution -> postmortem), prior monitoring tools (Pingdom,
+     UptimeRobot, Statuspage) and their feature sets as points of
+     comparison
+   - Chapter 3: Methodology & System Design — SDLC model used, use
+     case diagram (Admin, Manager, Responder actors), document-
+     relationship diagram from the schema above, sequence diagram for
+     the full detect-alert-escalate-resolve flow, your scheduling
+     design choice and why, your TCP-connect-in-place-of-ICMP-ping
+     justification, your consecutive-failure/success threshold
+     rationale, architecture diagram (React client <-> Express API +
+     Socket.io <-> [check engine + scheduler] + MongoDB, plus Brevo/SMS
+     as external alerting services)
+   - Chapter 4: Implementation & Testing — screenshots of the live
+     dashboard, a demonstrated real incident (take a test service down
+     deliberately, show the incident open, alert fire, then resolve
+     when it comes back), a demonstrated maintenance window suppressing
+     a false alarm, an SLA report with real accumulated data
+   - Chapter 5: Summary, Conclusion, Recommendations — be candid about
+     limitations (TCP-connect vs true ICMP ping, single-region checking
+     vs a real multi-region monitoring service, SMS cost constraints
+     limiting how broadly you demoed that channel) — genuine,
+     considered limitations read as rigor, not weakness
+
+6. TESTING CHECKLIST — RUN THESE SCENARIOS AND SCREENSHOT THE RESULTS
+   - Point a service at a real, currently-up URL -> confirm checks
+     succeed and status shows "up"
+   - Point a service at a non-existent host -> confirm checks fail,
+     an incident opens after the configured consecutive-failure
+     threshold (not on the very first failure), and an alert email
+     sends
+   - Bring the target back "up" (or point it at a working URL again)
+     -> confirm the incident auto-resolves after the configured
+     consecutive-success threshold and downtime duration is computed
+     correctly
+   - Schedule a maintenance window for a service, then deliberately
+     make it fail during that window -> confirm NO incident opens and
+     status shows "maintenance," not "down"
+   - Manually acknowledge an open incident -> confirm it's marked
+     acknowledged without being resolved, and that the escalation job
+     does NOT re-escalate an already-acknowledged incident
+   - Leave an incident unacknowledged past your configured escalation
+     window -> confirm an escalation alert fires
+   - Simulate a flapping service (rapid up/down/up/down) -> confirm it
+     gets flagged "flapping" with a single incident rather than a
+     rapid-fire sequence of separate ones
+   - Check an HTTPS target with an expiring/invalid certificate (or
+     simulate one) -> confirm the SSL check correctly distinguishes
+     "unreachable" from "certificate problem"
+   - View the SLA report for a service with some real downtime
+     recorded -> confirm the uptime % calculation matches what you'd
+     compute by hand from the incident/check history
+
+========================================================================
+NOTES
+========================================================================
+- The consecutive-failure/success threshold logic (never opening or
+  resolving an incident on a single blip) and the flapping-detection
+  cooldown are your strongest, most examinable pieces of design —
+  they're what separates a genuinely useful monitoring system from one
+  that spams false alerts constantly.
+- The severity-snapshotted-onto-the-incident-at-creation-time design
+  (rather than looking it up live from the service every time) is a
+  small but real data-integrity decision worth explaining if asked.
+- Be upfront that your "ping" check is a TCP connect check, not literal
+  ICMP, and explain why (container/hosting environment permission
+  constraints) — this is honest engineering, not a shortcut to hide.
+- The email-always/SMS-critical-only alerting design is a deliberate,
+  sensible cost-control decision — say so explicitly rather than
+  looking like SMS support was simply incomplete.
+========================================================================
