@@ -6,9 +6,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3000',
+      '/api': 'https://cloud-based-service-availability.onrender.com',
       '/socket.io': {
-        target: 'http://localhost:3000',
+        target: 'https://cloud-based-service-availability.onrender.com',
         ws: true,
       },
     },
