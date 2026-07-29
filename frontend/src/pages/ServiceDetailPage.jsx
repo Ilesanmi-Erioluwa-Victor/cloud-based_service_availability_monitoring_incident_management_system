@@ -63,7 +63,7 @@ export default function ServiceDetailPage() {
       {sla && (
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <h2 className="text-lg font-semibold mb-4">SLA / Uptime</h2>
-          <div className="flex items-center space-x-4 mb-4">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
             <span className="text-sm text-gray-500">Period:</span>
             {['24h', '7d', '30d'].map(p => (
               <button key={p} onClick={() => setRange(p)}

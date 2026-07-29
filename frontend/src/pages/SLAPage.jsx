@@ -30,7 +30,7 @@ export default function SLAPage() {
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">SLA Reports</h1>
 
-      <div className="flex items-center space-x-4 mb-6">
+      <div className="flex flex-wrap items-center gap-2 mb-6">
         <span className="text-sm text-gray-500">Period:</span>
         {['24h', '7d', '30d'].map(p => (
           <button key={p} onClick={() => setRange(p)}
@@ -40,7 +40,7 @@ export default function SLAPage() {
         ))}
       </div>
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
